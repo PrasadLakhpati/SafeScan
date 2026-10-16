@@ -146,9 +146,10 @@ public class MainActivity extends AppCompatActivity {
             startActivity(intent);
         });
 
-        manualPaymentCard.setOnClickListener(v ->
-                showToast("UPI / Mobile payment selected")
-        );
+        manualPaymentCard.setOnClickListener(v -> {
+            Intent intent = new Intent(MainActivity.this, UPIActivity.class);
+            startActivity(intent);
+        });
 
         checkUpiCard.setOnClickListener(v ->
                 showToast("UPI verification coming soon")

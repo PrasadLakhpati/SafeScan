@@ -1,4 +1,3 @@
-
 package com.example.tryme;
 
 import android.content.ActivityNotFoundException;
@@ -6,7 +5,6 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputFilter;
-import android.text.InputType;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
@@ -21,6 +19,10 @@ public class PaymentDetailsActivity extends AppCompatActivity {
     private Uri paymentUri;
     private EditText amountInput;
     private Button continueButton;
+    private TextView safetyStatus;
+    
+    private String upiId;
+    private String receiverNameStr;
 
     private boolean qrHasAmount;
 
@@ -33,64 +35,108 @@ public class PaymentDetailsActivity extends AppCompatActivity {
         TextView receiverName = findViewById(R.id.receiverName);
         TextView receiverUpi = findViewById(R.id.receiverUpi);
         TextView amountNote = findViewById(R.id.amountNote);
+        safetyStatus = findViewById(R.id.safetyStatus);
 
         amountInput = findViewById(R.id.amountInput);
         continueButton = findViewById(R.id.continueButton);
 
-        String qrValue = getIntent().getStringExtra("qr_value");
+        Intent intent = getIntent();
+        String qrValue = intent.getStringExtra("qr_value");
+        String manualUpiId = intent.getStringExtra("upi_id");
+        String manualUpiName = intent.getStringExtra("upi_name");
+        String manualSafetyStatus = intent.getStringExtra("safety_status");
 
-        if (qrValue == null) {
-            showInvalidQr();
+        if (qrValue != null) {
+            handleQrFlow(qrValue);
+        } else if (manualUpiId != null) {
+            handleManualFlow(manualUpiId, manualUpiName, manualSafetyStatus);
+        } else {
+            showInvalidFlow();
             return;
         }
 
+        if (receiverNameStr == null || receiverNameStr.trim().isEmpty()) {
+            receiverNameStr = "Unknown receiver";
+        }
+
+        receiverName.setText(receiverNameStr);
+        receiverUpi.setText(upiId);
+        receiverInitial.setText(receiverNameStr.substring(0, 1).toUpperCase());
+
+        if (qrHasAmount) {
+            amountInput.setEnabled(false);
+            amountNote.setText("Amount supplied by the QR code.");
+        } else {
+            amountInput.setEnabled(true);
+            amountNote.setText("Enter the amount you intend to pay.");
+        }
+
+        // Limit amount to two decimal places (overall length of 12 digits roughly)
+        amountInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(12)});
+
+        findViewById(R.id.backButton).setOnClickListener(v -> finish());
+        continueButton.setOnClickListener(v -> continueToUpiApp());
+    }
+
+    private void handleQrFlow(String qrValue) {
         paymentUri = Uri.parse(qrValue);
 
-        String upiId = paymentUri.getQueryParameter("pa");
-        String name = paymentUri.getQueryParameter("pn");
+        upiId = paymentUri.getQueryParameter("pa");
+        receiverNameStr = paymentUri.getQueryParameter("pn");
         String amount = paymentUri.getQueryParameter("am");
 
-        // Validate the payment QR again before displaying it.
         if (!"upi".equalsIgnoreCase(paymentUri.getScheme())
                 || !"pay".equalsIgnoreCase(paymentUri.getAuthority())
                 || upiId == null
                 || upiId.trim().isEmpty()
                 || upiId.contains(" ")) {
-            showInvalidQr();
+            showInvalidFlow();
             return;
         }
 
-        if (name == null || name.trim().isEmpty()) {
-            name = "Unknown receiver";
-        }
-
-        receiverName.setText(name);
-        receiverUpi.setText(upiId);
-        receiverInitial.setText(
-                name.substring(0, 1).toUpperCase()
-        );
-
         qrHasAmount = amount != null && !amount.trim().isEmpty();
-
         if (qrHasAmount) {
             amountInput.setText(amount);
-            amountInput.setEnabled(false);
-            amountNote.setText("Amount supplied by the QR code.");
-        } else {
-            amountInput.setEnabled(true);
-            amountNote.setText(
-                    "Enter the amount you intend to pay."
-            );
         }
+        
+        // For QR Flow, we don't have the status yet since it's just a raw QR
+        updateSafetyStatusUI("UNAVAILABLE");
+    }
 
-        // Limit amount to two decimal places.
-        amountInput.setFilters(new InputFilter[] {
-                new InputFilter.LengthFilter(12)
-        });
+    private void handleManualFlow(String manualUpiId, String manualUpiName, String manualSafetyStatus) {
+        upiId = manualUpiId;
+        receiverNameStr = manualUpiName;
+        qrHasAmount = false;
+        paymentUri = null; // Will build it on continue
 
-        findViewById(R.id.backButton).setOnClickListener(v -> finish());
-
-        continueButton.setOnClickListener(v -> continueToUpiApp());
+        if (upiId == null || upiId.trim().isEmpty() || upiId.contains(" ")) {
+            showInvalidFlow();
+            return;
+        }
+        
+        updateSafetyStatusUI(manualSafetyStatus != null ? manualSafetyStatus : "UNAVAILABLE");
+    }
+    
+    private void updateSafetyStatusUI(String status) {
+        switch (status) {
+            case "VERIFIED":
+                safetyStatus.setText("✓  Verified receiver");
+                safetyStatus.setTextColor(android.graphics.Color.parseColor("#22D3A3")); // Mint Green
+                break;
+            case "CAUTION":
+                safetyStatus.setText("⚠  Proceed with caution");
+                safetyStatus.setTextColor(android.graphics.Color.parseColor("#FBBF24")); // Amber
+                break;
+            case "RISK":
+                safetyStatus.setText("✕  Risk Identified");
+                safetyStatus.setTextColor(android.graphics.Color.parseColor("#EF4444")); // Red
+                break;
+            case "UNAVAILABLE":
+            default:
+                safetyStatus.setText("⚠  Receiver not verified yet");
+                safetyStatus.setTextColor(android.graphics.Color.parseColor("#FBBF24")); // Amber
+                break;
+        }
     }
 
     private void continueToUpiApp() {
@@ -115,13 +161,29 @@ public class PaymentDetailsActivity extends AppCompatActivity {
             return;
         }
 
-        Uri uriToOpen = paymentUri;
+        Uri uriToOpen;
 
-        // Add the amount only when the QR didn't supply one.
-        if (!qrHasAmount) {
-            uriToOpen = paymentUri.buildUpon()
-                    .appendQueryParameter("am", amount)
-                    .build();
+        if (paymentUri != null) {
+            // Started via QR Code
+            if (!qrHasAmount) {
+                uriToOpen = paymentUri.buildUpon()
+                        .appendQueryParameter("am", amount)
+                        .build();
+            } else {
+                uriToOpen = paymentUri;
+            }
+        } else {
+            // Started via Search Flow
+            Uri.Builder builder = new Uri.Builder()
+                    .scheme("upi")
+                    .authority("pay")
+                    .appendQueryParameter("pa", upiId)
+                    .appendQueryParameter("am", amount);
+            
+            if (receiverNameStr != null && !receiverNameStr.equals("Unknown receiver")) {
+                builder.appendQueryParameter("pn", receiverNameStr);
+            }
+            uriToOpen = builder.build();
         }
 
         Intent intent = new Intent(Intent.ACTION_VIEW, uriToOpen);
@@ -137,10 +199,10 @@ public class PaymentDetailsActivity extends AppCompatActivity {
         }
     }
 
-    private void showInvalidQr() {
+    private void showInvalidFlow() {
         Toast.makeText(
                 this,
-                "Invalid UPI payment QR.",
+                "Invalid payment details.",
                 Toast.LENGTH_LONG
         ).show();
 
